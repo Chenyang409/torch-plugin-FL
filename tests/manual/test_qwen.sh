@@ -77,20 +77,18 @@ echo "========================================"
 # CUDA_VISIBLE_DEVICES is assigned by the scheduler; torchrun sees GPUs 0..n-1
 # ---------------------------------------------------------------------------
 declare -a TASKS=(
-    "cuda_single|1|$PYTHON_BIN $SCRIPT --device cuda --model $MODEL_PATH --steps $STEPS --debug-bwd-hooks"
-    # FlagGems Triton on some stacks (e.g. H20) can raise: illegal memory access at kernel load.
-    # --no-flaggems disables Triton registration (must run before torch_flagos import; this script order is OK).
-    "flagos_single|1|$PYTHON_BIN $SCRIPT --device flagos --model $MODEL_PATH --steps $STEPS --debug-dump-dir ./debug_dump --flagos-qwen3-attention custom --debug-nan --debug-bwd-hooks --debug-bwd-hooks-verbose"
+    "cuda_single|1|$PYTHON_BIN $SCRIPT --device cuda --model $MODEL_PATH --steps $STEPS"
+    "flagos_single|1|$PYTHON_BIN $SCRIPT --device flagos --model $MODEL_PATH --steps $STEPS --flagos-qwen3-attention custom"
     # Re-enable FlagGems / Triton when kernels are fixed for your GPU + driver:
-    # "flagos_single_gems|1|ATTENTION_PROBE=1 $PYTHON_BIN $SCRIPT --device flagos --model $MODEL_PATH --steps $STEPS --debug-bwd-hooks --attention-probe --debug-dump-dir ./debug_dump --debug-attn-q-path --debug-attn-q-path-bwd"
-    # "cuda_ddp_nccl|2|torchrun --nproc_per_node=2 --master_port=29500 $SCRIPT --device cuda --model $MODEL_PATH --parallel ddp --comm nccl --steps $STEPS"
-    # "cuda_ddp_flagcx|2|torchrun --nproc_per_node=2 --master_port=29501 $SCRIPT --device cuda --model $MODEL_PATH --parallel ddp --comm flagcx --steps $STEPS"
-    # "cuda_fsdp_nccl|2|torchrun --nproc_per_node=2 --master_port=29502 $SCRIPT --device cuda --model $MODEL_PATH --parallel fsdp --comm nccl --steps $STEPS"
-    # "cuda_fsdp_flagcx|2|torchrun --nproc_per_node=2 --master_port=29503 $SCRIPT --device cuda --model $MODEL_PATH --parallel fsdp --comm flagcx --steps $STEPS"
-    # "flagos_ddp_nccl|2|torchrun --nproc_per_node=2 --master_port=29504 $SCRIPT --device flagos --model $MODEL_PATH --parallel ddp --comm nccl --steps $STEPS"
-    # "flagos_ddp_flagcx|2|torchrun --nproc_per_node=2 --master_port=29505 $SCRIPT --device flagos --model $MODEL_PATH --parallel ddp --comm flagcx --steps $STEPS"
-    # "flagos_fsdp_nccl|2|torchrun --nproc_per_node=2 --master_port=29506 $SCRIPT --device flagos --model $MODEL_PATH --parallel fsdp --comm nccl --steps $STEPS"
-    # "flagos_fsdp_flagcx|2|torchrun --nproc_per_node=2 --master_port=29507 $SCRIPT --device flagos --model $MODEL_PATH --parallel fsdp --comm flagcx --steps $STEPS"
+    "flagos_single_gems|1|ATTENTION_PROBE=1 $PYTHON_BIN $SCRIPT --device flagos --model $MODEL_PATH --steps $STEPS --debug-bwd-hooks --attention-probe --debug-dump-dir ./debug_dump --debug-attn-q-path --debug-attn-q-path-bwd"
+    "cuda_ddp_nccl|2|torchrun --nproc_per_node=2 --master_port=29500 $SCRIPT --device cuda --model $MODEL_PATH --parallel ddp --comm nccl --steps $STEPS"
+    "cuda_ddp_flagcx|2|torchrun --nproc_per_node=2 --master_port=29501 $SCRIPT --device cuda --model $MODEL_PATH --parallel ddp --comm flagcx --steps $STEPS"
+    "cuda_fsdp_nccl|2|torchrun --nproc_per_node=2 --master_port=29502 $SCRIPT --device cuda --model $MODEL_PATH --parallel fsdp --comm nccl --steps $STEPS"
+    "cuda_fsdp_flagcx|2|torchrun --nproc_per_node=2 --master_port=29503 $SCRIPT --device cuda --model $MODEL_PATH --parallel fsdp --comm flagcx --steps $STEPS"
+    "flagos_ddp_nccl|2|torchrun --nproc_per_node=2 --master_port=29504 $SCRIPT --device flagos --model $MODEL_PATH --parallel ddp --comm nccl --steps $STEPS"
+    "flagos_ddp_flagcx|2|torchrun --nproc_per_node=2 --master_port=29505 $SCRIPT --device flagos --model $MODEL_PATH --parallel ddp --comm flagcx --steps $STEPS"
+    "flagos_fsdp_nccl|2|torchrun --nproc_per_node=2 --master_port=29506 $SCRIPT --device flagos --model $MODEL_PATH --parallel fsdp --comm nccl --steps $STEPS"
+    "flagos_fsdp_flagcx|2|torchrun --nproc_per_node=2 --master_port=29507 $SCRIPT --device flagos --model $MODEL_PATH --parallel fsdp --comm flagcx --steps $STEPS"
 )
 
 # ---------------------------------------------------------------------------

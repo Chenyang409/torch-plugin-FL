@@ -112,159 +112,26 @@ def parse_args():
     parser.add_argument("--steps", type=int, default=10)
     parser.add_argument("--lr", type=float, default=1e-5)
     parser.add_argument(
-        "--debug-nan",
-        action="store_true",
-        help="Log finiteness stats for loss/logits, batch, sampled params/grads "
-        "(rank 0). Also enabled if env DEBUG_NAN is 1/true/yes.",
-    )
-    parser.add_argument(
-        "--debug-bwd-hooks",
-        action="store_true",
-        help="Step 1 only: full_backward_hook on every submodule; each hook prints "
-        "grad_input/grad_output tensor stats (mean,min,max,bad); first non-finite "
-        "backward saves tensors to --debug-dump-dir; enables first-forward-NaN capture "
-        "for all steps (rank 0). Env DEBUG_BWD_HOOKS=1.",
-    )
-    parser.add_argument(
-        "--debug-bwd-hooks-verbose",
-        action="store_true",
-        help="Print every backward-hook invocation (huge log). Default: anomalies + summary.",
-    )
-    parser.add_argument(
-        "--debug-bwd-hooks-max-print",
-        type=int,
-        default=80,
-        help="Max anomaly lines to print for --debug-bwd-hooks (default: 80).",
-    )
-    parser.add_argument(
-        "--attention-probe",
-        action="store_true",
-        help="Rank 0: log self_attn I/O stats per block; also register full-model forward hooks "
-        "to torch.save the first submodule whose output has non-finite values each step "
-        "(see --debug-dump-dir). Env ATTENTION_PROBE=1.",
-    )
-    parser.add_argument(
-        "--attention-probe-dir",
-        type=str,
-        default="attention_probe_dump",
-        help="Legacy alias: used as --debug-dump-dir when the latter is unset.",
-    )
-    parser.add_argument(
-        "--debug-dump-dir",
-        type=str,
-        default=None,
-        help="Directory for first-NaN tensor saves (default: --attention-probe-dir value).",
-    )
-    parser.add_argument(
-        "--debug-bwd-hooks-skip-per-hook-stats",
-        action="store_true",
-        help="With --debug-bwd-hooks, do not print mean/min/max/bad for every module (only summary).",
-    )
-    parser.add_argument(
-        "--no-flaggems",
-        action="store_true",
-        help="For --device flagos: do not register FlagGems (PyTorch fallback for PrivateUse1; often slower). "
-        "Same as env TORCH_FLAGOS_DISABLE_FLAGGEMS=1; must be in effect before importing torch_flagos "
-        "(this script sets the env when you pass the flag).",
-    )
-    parser.add_argument(
         "--flagos-qwen3-attention",
-        choices=("hf", "custom"),
+        choices=("custom",),
         default="custom",
-        help="For --device flagos only: keep HuggingFace Qwen3Attention (hf) or use FlagosQwen3Attention with "
-        "custom eager autograd.Function (custom, default). Ignored when --device cuda. "
-        "If env FLAGOS_QWEN3_ATTENTION is set to hf|huggingface|original or custom|flagos, it overrides this flag.",
-    )
-    parser.add_argument(
-        "--qwen3-attention-device-presync",
-        action="store_true",
-        help="Register a forward_pre_hook on each Qwen3Attention that calls device synchronize before the module "
-        "runs (torch_flagos.flagos.synchronize if --device flagos, else torch.cuda.synchronize). "
-        "Env: QWEN3_ATTENTION_DEVICE_PRESYNC=1.",
-    )
-    parser.add_argument(
-        "--check-autograd-engine",
-        action="store_true",
-        help="Before loading the model: run small autograd graphs on this process's training device "
-        "(finite grads, expected numeric values; matmul + torch.autograd.grad). Catches many engine/stream "
-        "read-order issues when paired with sync. Env CHECK_AUTOGRAD_ENGINE=1.",
-    )
-    parser.add_argument(
-        "--debug-attn-q-path",
-        action="store_true",
-        help="Rank 0: after each forward, print per-layer stats for Qwen3Attention q_proj / q_norm outputs "
-        "(and k_norm for contrast). Interprets forward vs backward when combined with --debug-attn-q-path-bwd. "
-        "Env DEBUG_ATTN_Q_PATH=1.",
-    )
-    parser.add_argument(
-        "--debug-attn-q-path-layers",
-        type=str,
-        default=None,
-        help="Comma-separated decoder layer indices (e.g. 25,26,27). Default: all layers.",
-    )
-    parser.add_argument(
-        "--debug-attn-q-path-bwd",
-        action="store_true",
-        help="With --debug-attn-q-path: register full_backward_hook on q_proj, q_norm, k_norm; "
-        "after loss.backward(), print g_out/g_in absmax and non-finite flags (compact). "
-        "Env DEBUG_ATTN_Q_PATH_BWD=1.",
+        help="For --device flagos only: use FlagosQwen3Attention with custom eager autograd.Function.",
     )
     args = parser.parse_args()
-    env_debug = os.environ.get("DEBUG_NAN", "").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-    )
-    args.debug_nan = bool(args.debug_nan or env_debug)
-    env_bwd = os.environ.get("DEBUG_BWD_HOOKS", "").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-    )
-    args.debug_bwd_hooks = bool(args.debug_bwd_hooks or env_bwd)
-    env_attn = os.environ.get("ATTENTION_PROBE", "").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-    )
-    args.attention_probe = bool(args.attention_probe or env_attn)
-    args.debug_dump_dir = args.debug_dump_dir or args.attention_probe_dir
-    env_no_flaggems = os.environ.get("TORCH_FLAGOS_DISABLE_FLAGGEMS", "").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-        "on",
-    )
-    args.no_flaggems = bool(args.no_flaggems or env_no_flaggems)
-    if args.no_flaggems:
-        os.environ["TORCH_FLAGOS_DISABLE_FLAGGEMS"] = "1"
-
-    _flagos_attn_env = os.environ.get("FLAGOS_QWEN3_ATTENTION", "").strip().lower()
-    if _flagos_attn_env in ("hf", "huggingface", "original"):
-        args.flagos_qwen3_attention = "hf"
-    elif _flagos_attn_env in ("custom", "flagos"):
-        args.flagos_qwen3_attention = "custom"
-
-    def _env_truthy(name: str) -> bool:
-        return os.environ.get(name, "").strip().lower() in (
-            "1",
-            "true",
-            "yes",
-            "on",
-        )
-
-    args.qwen3_attention_device_presync = bool(
-        args.qwen3_attention_device_presync or _env_truthy("QWEN3_ATTENTION_DEVICE_PRESYNC")
-    )
-    args.check_autograd_engine = bool(
-        args.check_autograd_engine or _env_truthy("CHECK_AUTOGRAD_ENGINE")
-    )
-    args.debug_attn_q_path = bool(
-        args.debug_attn_q_path or _env_truthy("DEBUG_ATTN_Q_PATH")
-    )
-    args.debug_attn_q_path_bwd = bool(
-        args.debug_attn_q_path_bwd or _env_truthy("DEBUG_ATTN_Q_PATH_BWD")
-    )
+    # Debug/diagnostic knobs are intentionally disabled in this manual script.
+    args.debug_nan = False
+    args.debug_bwd_hooks = False
+    args.debug_bwd_hooks_verbose = False
+    args.debug_bwd_hooks_max_print = 0
+    args.debug_bwd_hooks_skip_per_hook_stats = False
+    args.attention_probe = False
+    args.debug_dump_dir = "attention_probe_dump"
+    args.no_flaggems = False
+    args.qwen3_attention_device_presync = False
+    args.check_autograd_engine = False
+    args.debug_attn_q_path = False
+    args.debug_attn_q_path_layers = None
+    args.debug_attn_q_path_bwd = False
 
     if args.seq_len is None:
         args.seq_len = 256 if args.parallel != "none" else 1024
@@ -1831,22 +1698,12 @@ def train_step(
     device,
     args,
     step=0,
-    attention_probe=None,
-    first_nan_forward=None,
-    attn_q_path_probe=None,
 ):
     """Forward + loss computation.
 
     Returns (loss, batch_tokens, forward_outputs_or_none).
     ``forward_outputs`` is only retained when ``args.debug_nan`` to inspect logits.
     """
-    if attention_probe is not None:
-        attention_probe.before_forward(step)
-    if first_nan_forward is not None:
-        first_nan_forward.before_forward(step)
-    if attn_q_path_probe is not None:
-        attn_q_path_probe.before_forward(step)
-
     input_ids = batch["input_ids"].to(device)
     attention_mask = batch["attention_mask"].to(device)
     labels = batch["labels"].to(device)
@@ -1859,13 +1716,7 @@ def train_step(
     )
     loss = outputs.loss
 
-    if attention_probe is not None:
-        attention_probe.flush()
-    if attn_q_path_probe is not None:
-        attn_q_path_probe.flush_forward()
-
-    fwd = outputs if args.debug_nan else None
-    return loss, input_ids.numel(), fwd
+    return loss, input_ids.numel(), None
 
 
 # ---------------------------------------------------------------------------
