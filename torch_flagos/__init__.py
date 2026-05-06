@@ -1,3 +1,4 @@
+import os
 import sys
 
 from torch_flagos._maca_cudart_shim import ensure_cudart_shim
@@ -140,6 +141,33 @@ def _get_cudaMemcpy():
 
     return _cudaMemcpy
 
+_GEMM_OPS = {"mm", "addmm", "matmul", "bmm"}
+def _make_contiguous_wrapper(op_name, impl_func):
+    """
+    Create a wrapper that ensures input tensors are contiguous before calling the FlagGems kernel.
+
+    FlagGems Triton kernels require the last dimension to be contiguous.
+    If input tensors are non-contiguous (e.g., due to transpose in backward),
+    we need to make them contiguous before calling the kernel.
+    """
+
+    def wrapper(*args, **kwargs):
+        new_args = []
+        for arg in args:
+            if hasattr(arg, "is_contiguous") and hasattr(arg, "stride"):
+                if not arg.is_contiguous():
+                    arg = arg.contiguous()
+            new_args.append(arg)
+
+        # Also check kwargs for tensor inputs
+        for key, value in kwargs.items():
+            if hasattr(value, "is_contiguous") and hasattr(value, "stride"):
+                if not value.is_contiguous():
+                    kwargs[key] = value.contiguous()
+
+        return impl_func(*new_args, **kwargs)
+
+    return wrapper
 
 def _register_flaggems_operators():
     """
@@ -172,7 +200,11 @@ def _register_flaggems_operators():
             continue
 
         op_name = item[0]
-        impl_func = item[1]
+        global _GEMM_OPS
+        if op_name in _GEMM_OPS:
+            impl_func = _make_contiguous_wrapper(op_name, item[1])
+        else:
+            impl_func = item[1]
 
         # Skip excluded ops - they will use cpu_fallback
         if op_name in _EXCLUDED_OPS:
@@ -260,10 +292,17 @@ def is_flaggems_enabled():
     return len(_registered_ops) > 0
 
 
-# Auto-register FlagGems operators on import
-_register_flaggems_operators()
-_composite_ops_lib = _register_composite_ops()
+def _flaggems_disabled_by_env() -> bool:
+    """If true, skip FlagGems registration; PrivateUse1 uses PyTorch fallback paths."""
+    v = os.environ.get("TORCH_FLAGOS_DISABLE_FLAGGEMS", "").strip().lower()
+    return v in ("1", "true", "yes", "on")
 
+
+# Auto-register FlagGems unless disabled (see TORCH_FLAGOS_DISABLE_FLAGGEMS).
+if not _flaggems_disabled_by_env():
+    _register_flaggems_operators()
+# slice_backward / log_softmax decompositions for PrivateUse1 (avoids bad cpu_fallback)
+_composite_ops_lib = _register_composite_ops()
 
 # Re-export integration utilities
 from torch_flagos.integration import (  # noqa: E402

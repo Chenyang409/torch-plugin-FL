@@ -43,3 +43,7 @@ ENV/
 *.log
 .DS_Store
 Thumbs.db
+*.jsonl
+*.pt
+flagos_venv
+*.tar

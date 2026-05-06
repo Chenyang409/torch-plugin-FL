@@ -10,13 +10,57 @@
 #   bash tests/test_qwen.sh 10           # custom step count
 #   bash tests/test_qwen.sh 3 logs/run1  # custom steps + log directory
 #   NUM_GPUS=4 bash tests/test_qwen.sh   # manually specify total GPU count
+#
+#   GPU pool indices 0..N-1 are passed to CUDA_VISIBLE_DEVICES for each task.
+#   To map pool slot 0 to physical GPU 1 (e.g. GPU 0 is busy), set:
+#     GPU_POOL_OFFSET=1 NUM_GPUS=1 bash tests/manual/test_qwen.sh
+#   (Exporting CUDA_VISIBLE_DEVICES before this script is overwritten at launch; use OFFSET instead.)
 
-set -euo pipefail
+# set -euo pipefail
 
-STEPS=${1:-5}
+# STEPS=${1:-5}
+# SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# LOG_DIR=${2:-$SCRIPT_DIR/logs/$(date +%Y%m%d_%H%M%S)}
+# SCRIPT=tests/test_qwen3_train.py
+STEPS=5
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-LOG_DIR=${2:-$SCRIPT_DIR/logs/$(date +%Y%m%d_%H%M%S)}
-SCRIPT=tests/test_qwen3_train.py
+LOG_DIR="$SCRIPT_DIR/logs/$(date +%Y%m%d_%H%M%S)"
+SCRIPT=tests/manual/test_qwen3_train.py
+PYTHON_BIN=${PYTHON_BIN:-python3}
+MODEL_PATH=${MODEL_PATH:-/data/nfs/Qwen3-0.6B}
+# Added to each pool GPU id when setting CUDA_VISIBLE_DEVICES (default 0).
+GPU_POOL_OFFSET=${GPU_POOL_OFFSET:-0}
+
+POSITIONAL_ARGS=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --steps)
+            STEPS="$2"
+            shift 2
+            ;;
+        --log-dir)
+            LOG_DIR="$2"
+            shift 2
+            ;;
+        --model|--model-path)
+            MODEL_PATH="$2"
+            shift 2
+            ;;
+        --python-bin)
+            PYTHON_BIN="$2"
+            shift 2
+            ;;
+        -h|--help)
+            echo "Usage: bash tests/manual/test_qwen.sh [--steps N] [--log-dir DIR] [--model PATH] [--python-bin PYTHON]"
+            exit 0
+            ;;
+        *)
+            POSITIONAL_ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+
 TOTAL_GPUS=${NUM_GPUS:-$(nvidia-smi -L 2>/dev/null | wc -l)}
 
 mkdir -p "$LOG_DIR"
@@ -33,16 +77,20 @@ echo "========================================"
 # CUDA_VISIBLE_DEVICES is assigned by the scheduler; torchrun sees GPUs 0..n-1
 # ---------------------------------------------------------------------------
 declare -a TASKS=(
-    "cuda_single|1|python $SCRIPT --device cuda --steps $STEPS"
-    "flagos_single|1|python $SCRIPT --device flagos --steps $STEPS"
-    "cuda_ddp_nccl|2|torchrun --nproc_per_node=2 --master_port=29500 $SCRIPT --device cuda --parallel ddp --comm nccl --steps $STEPS"
-    "cuda_ddp_flagcx|2|torchrun --nproc_per_node=2 --master_port=29501 $SCRIPT --device cuda --parallel ddp --comm flagcx --steps $STEPS"
-    "cuda_fsdp_nccl|2|torchrun --nproc_per_node=2 --master_port=29502 $SCRIPT --device cuda --parallel fsdp --comm nccl --steps $STEPS"
-    "cuda_fsdp_flagcx|2|torchrun --nproc_per_node=2 --master_port=29503 $SCRIPT --device cuda --parallel fsdp --comm flagcx --steps $STEPS"
-    "flagos_ddp_nccl|2|torchrun --nproc_per_node=2 --master_port=29504 $SCRIPT --device flagos --parallel ddp --comm nccl --steps $STEPS"
-    "flagos_ddp_flagcx|2|torchrun --nproc_per_node=2 --master_port=29505 $SCRIPT --device flagos --parallel ddp --comm flagcx --steps $STEPS"
-    "flagos_fsdp_nccl|2|torchrun --nproc_per_node=2 --master_port=29506 $SCRIPT --device flagos --parallel fsdp --comm nccl --steps $STEPS"
-    "flagos_fsdp_flagcx|2|torchrun --nproc_per_node=2 --master_port=29507 $SCRIPT --device flagos --parallel fsdp --comm flagcx --steps $STEPS"
+    "cuda_single|1|$PYTHON_BIN $SCRIPT --device cuda --model $MODEL_PATH --steps $STEPS --debug-bwd-hooks"
+    # FlagGems Triton on some stacks (e.g. H20) can raise: illegal memory access at kernel load.
+    # --no-flaggems disables Triton registration (must run before torch_flagos import; this script order is OK).
+    "flagos_single|1|$PYTHON_BIN $SCRIPT --device flagos --model $MODEL_PATH --steps $STEPS --debug-dump-dir ./debug_dump --flagos-qwen3-attention custom --debug-nan --debug-bwd-hooks --debug-bwd-hooks-verbose"
+    # Re-enable FlagGems / Triton when kernels are fixed for your GPU + driver:
+    # "flagos_single_gems|1|ATTENTION_PROBE=1 $PYTHON_BIN $SCRIPT --device flagos --model $MODEL_PATH --steps $STEPS --debug-bwd-hooks --attention-probe --debug-dump-dir ./debug_dump --debug-attn-q-path --debug-attn-q-path-bwd"
+    # "cuda_ddp_nccl|2|torchrun --nproc_per_node=2 --master_port=29500 $SCRIPT --device cuda --model $MODEL_PATH --parallel ddp --comm nccl --steps $STEPS"
+    # "cuda_ddp_flagcx|2|torchrun --nproc_per_node=2 --master_port=29501 $SCRIPT --device cuda --model $MODEL_PATH --parallel ddp --comm flagcx --steps $STEPS"
+    # "cuda_fsdp_nccl|2|torchrun --nproc_per_node=2 --master_port=29502 $SCRIPT --device cuda --model $MODEL_PATH --parallel fsdp --comm nccl --steps $STEPS"
+    # "cuda_fsdp_flagcx|2|torchrun --nproc_per_node=2 --master_port=29503 $SCRIPT --device cuda --model $MODEL_PATH --parallel fsdp --comm flagcx --steps $STEPS"
+    # "flagos_ddp_nccl|2|torchrun --nproc_per_node=2 --master_port=29504 $SCRIPT --device flagos --model $MODEL_PATH --parallel ddp --comm nccl --steps $STEPS"
+    # "flagos_ddp_flagcx|2|torchrun --nproc_per_node=2 --master_port=29505 $SCRIPT --device flagos --model $MODEL_PATH --parallel ddp --comm flagcx --steps $STEPS"
+    # "flagos_fsdp_nccl|2|torchrun --nproc_per_node=2 --master_port=29506 $SCRIPT --device flagos --model $MODEL_PATH --parallel fsdp --comm nccl --steps $STEPS"
+    # "flagos_fsdp_flagcx|2|torchrun --nproc_per_node=2 --master_port=29507 $SCRIPT --device flagos --model $MODEL_PATH --parallel fsdp --comm flagcx --steps $STEPS"
 )
 
 # ---------------------------------------------------------------------------
@@ -134,7 +182,12 @@ for entry in "${TASKS[@]}"; do
     done
 
     echo "[LAUNCH] $name  (GPUs: $ALLOC_GPUS) -> $log_file"
-    ( CUDA_VISIBLE_DEVICES=$ALLOC_GPUS eval "$cmd" > "$log_file" 2>&1 ) &
+    _cv=""
+    IFS=',' read -ra _alloc_ids <<< "$ALLOC_GPUS"
+    for _id in "${_alloc_ids[@]}"; do
+        _cv="${_cv:+$_cv,}$((_id + GPU_POOL_OFFSET))"
+    done
+    ( CUDA_VISIBLE_DEVICES="$_cv" eval "$cmd" > "$log_file" 2>&1 ) &
     local_pid=$!
     mark_busy "$ALLOC_GPUS" "$local_pid"
     PID_TO_NAME[$local_pid]="$name"
