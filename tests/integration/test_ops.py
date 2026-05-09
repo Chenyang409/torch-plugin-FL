@@ -317,3 +317,49 @@ class TestSync:
             torch_flagos.flagos.synchronize()
         else:
             torch.cuda.synchronize()
+
+
+# ---------------------------------------------------------------------------
+# 12. Scaled dot-product attention
+# ---------------------------------------------------------------------------
+
+
+class TestSDPA:
+    """Covers torch.nn.functional.scaled_dot_product_attention.
+
+    On CUDA, PyTorch dispatches to a flash/efficient kernel. On flagos
+    (PrivateUse1), it dispatches to aten._scaled_dot_product_flash_attention_for_cpu,
+    which we decompose to matmul+softmax in torch_flagos._register_composite_ops.
+    Same high-level call exercises both paths.
+    """
+
+    @staticmethod
+    def _qkv(device, B=2, H=4, S=16, D=32, dtype=torch.float32):
+        q = torch.randn(B, H, S, D, device=device, dtype=dtype)
+        k = torch.randn(B, H, S, D, device=device, dtype=dtype)
+        v = torch.randn(B, H, S, D, device=device, dtype=dtype)
+        return q, k, v
+
+    def test_forward_runs(self, device):
+        q, k, v = self._qkv(device)
+        out = torch.nn.functional.scaled_dot_product_attention(q, k, v)
+        assert out.shape == q.shape
+        assert out.device.type == device.split(":")[0]
+
+    def test_matches_cpu_reference(self, device):
+        q, k, v = self._qkv(device)
+        out = torch.nn.functional.scaled_dot_product_attention(q, k, v)
+
+        q_cpu, k_cpu, v_cpu = q.cpu(), k.cpu(), v.cpu()
+        ref = torch.nn.functional.scaled_dot_product_attention(q_cpu, k_cpu, v_cpu)
+        assert torch.allclose(out.cpu(), ref, atol=1e-4, rtol=1e-4)
+
+    def test_causal(self, device):
+        q, k, v = self._qkv(device)
+        out = torch.nn.functional.scaled_dot_product_attention(
+            q, k, v, is_causal=True
+        )
+        ref = torch.nn.functional.scaled_dot_product_attention(
+            q.cpu(), k.cpu(), v.cpu(), is_causal=True
+        )
+        assert torch.allclose(out.cpu(), ref, atol=1e-4, rtol=1e-4)
