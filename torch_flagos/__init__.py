@@ -227,7 +227,7 @@ def _register_composite_ops():
         )
         return torch.slice_scatter(grad_input, grad_output, dim, start, end, step)
 
-    #lib.impl("slice_backward", slice_backward_impl, "PrivateUse1")
+    lib.impl("slice_backward", slice_backward_impl, "PrivateUse1")
 
     # log_softmax: decompose into softmax + log to avoid FlagGems Triton kernel
     # that exceeds MACA's 4KB/thread private memory on large vocab dimensions.
