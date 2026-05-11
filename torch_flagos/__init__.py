@@ -105,6 +105,9 @@ _EXCLUDED_OPS = {
     # limit on large vocab (e.g. Qwen3 151k). Use Python decomposition instead.
     "_log_softmax",
     "_log_softmax_backward_data",
+    # SDPA flash-for-cpu — FlagGems has no entry for this schema; provide a
+    # Python decomposition (matmul + softmax) in _register_composite_ops.
+    "_scaled_dot_product_flash_attention_for_cpu",
 }
 
 
@@ -242,6 +245,50 @@ def _register_composite_ops():
 
     lib.impl("_log_softmax", log_softmax_impl, "PrivateUse1")
     lib.impl("_log_softmax_backward_data", log_softmax_backward_impl, "PrivateUse1")
+
+    # _scaled_dot_product_flash_attention_for_cpu: math decomposition.
+    # Schema: (query, key, value, dropout_p=0.0, is_causal=False, *,
+    #          attn_mask=None, scale=None) -> (output, logsumexp)
+    # query/key/value shape: (B, H, S, D). FlagGems has no entry for this op
+    # name; routing through matmul + softmax keeps every kernel on the flagos
+    # device and lets FlagGems handle the heavy lifting underneath.
+    def sdpa_flash_for_cpu_impl(
+        query,
+        key,
+        value,
+        dropout_p=0.0,
+        is_causal=False,
+        attn_mask=None,
+        scale=None,
+    ):
+        head_dim = query.size(-1)
+        scale_factor = scale if scale is not None else (1.0 / (head_dim**0.5))
+        # (B, H, Sq, D) @ (B, H, D, Sk) -> (B, H, Sq, Sk)
+        scores = torch.matmul(query, key.transpose(-2, -1)) * scale_factor
+        if attn_mask is not None:
+            scores = scores + attn_mask
+        if is_causal:
+            sq, sk = scores.size(-2), scores.size(-1)
+            causal_mask = torch.ones(sq, sk, dtype=torch.bool, device=scores.device)
+            causal_mask = torch.tril(causal_mask)
+            scores = scores.masked_fill(~causal_mask, float("-inf"))
+        attn = torch.softmax(scores, dim=-1)
+        if dropout_p > 0.0:
+            attn = torch.nn.functional.dropout(attn, p=dropout_p)
+        output = torch.matmul(attn, value)
+        # logsumexp is only consumed by the backward pass; forward callers
+        # ignore it. FlagGems' sum_dim has a squeeze-dim bug on 4D inputs that
+        # causes an illegal memory access, so return an empty placeholder.
+        logsumexp = torch.empty(
+            scores.shape[:-1], dtype=scores.dtype, device=scores.device
+        )
+        return output, logsumexp
+
+    lib.impl(
+        "_scaled_dot_product_flash_attention_for_cpu",
+        sdpa_flash_for_cpu_impl,
+        "PrivateUse1",
+    )
 
     return lib  # prevent GC
 
